@@ -6,12 +6,13 @@ import arrow
 import emoji
 
 class MessageReader:
-    def __init__(self, stop_words_file, threshold, names=[], skip=[]):
+    def __init__(self, stop_words_file, threshold=1, names=[], skip=[]):
         self.stop_words = []
         self.read_stop_words(stop_words_file)
 
         self.total_no_messages = 0
         self.vocabulary_size = 0
+        self.total_word_count = 0
         self.bigram_phrases = 0
         self.trigram_phrases = 0
         self.threshold = threshold
@@ -24,6 +25,8 @@ class MessageReader:
         self.updated = arrow.utcnow()
 
         self.messages_per_person = {}
+        self.sum_message_length = {}
+        self.average_message_length = {}
         self.total_term_frequency = {}
         self.term_frequency_names = {}
         self.bigram_total_term_frequency = {}
@@ -39,6 +42,28 @@ class MessageReader:
                 for word in line.split():
                     self.stop_words.append(word.lower())
 
+    # Reset all variables
+    def reset(self):
+        self.total_no_messages = 0
+        self.vocabulary_size = 0
+        self.total_word_count = 0
+        self.bigram_phrases = 0
+        self.trigram_phrases = 0
+
+        self.start_date = None
+        self.end_date = None
+        self.updated = arrow.utcnow()
+
+        self.messages_per_person = {}
+        self.sum_message_length = {}
+        self.average_message_length = {}
+        self.total_term_frequency = {}
+        self.term_frequency_names = {}
+        self.bigram_total_term_frequency = {}
+        self.bigram_term_frequency_names = {}
+        self.trigram_total_term_frequency = {}
+        self.trigram_term_frequency_names = {}
+
     # Retrieve the alphanumeric characters in lowercase
     def tokenise(self, word):
         return ''.join(ch for ch in word.lower() if ch.isalnum() or ch in emoji.UNICODE_EMOJI)
@@ -49,7 +74,7 @@ class MessageReader:
             message_files = os.listdir(message_dir)
         else:
             print("Invalid directory provided: {}".format(message_dir))
-            pass
+            return
         for message_file in message_files:
             file = '{}/{}'.format(message_dir, message_file)
             if not message_file.startswith('.') and os.path.isfile(file):
@@ -60,7 +85,10 @@ class MessageReader:
                     self.read_messages_txt(file)
             else:
                 print("Invalid file provided: {}".format(file))
-                pass
+                continue
+
+        for name in self.names:
+            self.average_message_length[name] = int(self.sum_message_length[name]/self.messages_per_person[name])
 
     # Reads a json file and saves the messages in a dictionary
     def read_json(self, filename):
@@ -68,7 +96,6 @@ class MessageReader:
             messages = json.load(json_file)
         return messages
 
-    #TODO: Add list of dates 
     # Reads and analyses the frequencies of messages (provided a json file)
     def read_messages_json(self, message_file):
         messages_json = self.read_json(message_file)
@@ -80,9 +107,15 @@ class MessageReader:
         for name in self.names:
             if(name not in self.messages_per_person):
                 self.messages_per_person[name] = 0
+            if(name not in self.sum_message_length):
+                self.sum_message_length[name] = 0
+            if(name not in self.average_message_length):
+                self.average_message_length[name] = 0
 
         messages = messages_json["messages"]
         for message in messages:
+            
+            # Update start and end date
             date = arrow.get(message["timestamp_ms"]/1000)
             if self.start_date is not None: 
                 if date < self.start_date:
@@ -94,6 +127,8 @@ class MessageReader:
                     self.end_date = date
             else:
                 self.end_date = date
+
+            # Update counts for message and calls analyse content for stats
             sender_name = message["sender_name"]
             if "content" in message:
                 content = message["content"]
@@ -112,6 +147,10 @@ class MessageReader:
         for name in self.names:
             if(name not in self.messages_per_person):
                 self.messages_per_person[name] = 0
+            if(name not in self.sum_message_length):
+                self.sum_message_length[name] = 0
+            if(name not in self.average_message_length):
+                self.average_message_length[name] = 0
 
         with open(message_file, 'r') as f_read:
             for line in f_read:
@@ -138,15 +177,17 @@ class MessageReader:
                 # Message counts
                 self.total_no_messages += 1
                 self.messages_per_person[sender_name] += 1
-
                 self.analyse_content(split_content, sender_name)
+            
 
     # Analyses the frequencies of terms, bigrams and trigrams given a list of words
     def analyse_content(self, split_content, sender_name):
+        self.sum_message_length[sender_name] += len(split_content)
         # Single word frequency analysis
         for word in split_content:
             term = self.tokenise(word)
             if(len(term) > 0 and term not in self.stop_words and term not in self.skip):
+                self.total_word_count += 1
                 if (term not in self.total_term_frequency):
                     self.total_term_frequency[term] = 0
                     self.vocabulary_size += 1
@@ -222,15 +263,25 @@ class MessageReader:
 
             f_write.write(str('Vocabulary Size: %d' % self.vocabulary_size))
             f_write.write('\n')
-
-            f_write.write(str('Total Number of Messages: %d' % self.total_no_messages))
+            
+            f_write.write(str('Total Word Count: %d' % self.total_word_count))
             f_write.write('\n')
+
+            for name in self.names:
+                f_write.write(str('%s: %d' % (name, self.sum_message_length[name])))
+                f_write.write('\n')
 
             f_write.write(str('Total Number of Messages: %d' % self.total_no_messages))
             f_write.write('\n')
 
             for name in self.names:
                 f_write.write(str('%s: %d' % (name, self.messages_per_person[name])))
+                f_write.write('\n')
+
+            f_write.write('Average Message Length:\n')
+            
+            for name in self.names:
+                f_write.write(str('%s: %d' % (name, self.average_message_length[name])))
                 f_write.write('\n')
 
             f_write.write(str('Number of Bigram Phrases: %d' % self.bigram_phrases))
@@ -245,6 +296,11 @@ class MessageReader:
 
             if self.end_date is not None:
                 f_write.write(str('End Date: %s' % self.end_date.format('YYYY-MM-DD')))
+                f_write.write('\n')
+
+            if self.start_date and self.end_date is not None:
+                diff = self.end_date - self.start_date
+                f_write.write(str('Total duration: %s' % diff))
                 f_write.write('\n')
 
         # Write Single Term Frequency file
