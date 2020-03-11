@@ -5,13 +5,14 @@ import operator
 import collections
 import arrow
 import emoji
+import random
 
 ############################################################
-#-----              CLASS DEFINITION             ----------#
+#-----              CLASS DECLARATION            ----------#
 ############################################################
 
 class MessageReader:
-    def __init__(self, stop_words_file, chain_length = 2, limit_end=8, absolute_end=15, start_string =  '__START__', end_string='__END__', threshold=1, names=[], skip=[]):
+    def __init__(self, stop_words_file, chain_length=2, limit_end_message=10, absolute_end_message=15, start_string =  '__START__', end_string='__END__', threshold=1, names=[], skip=[], txt_names=[], json_names=[]):
         # stop words
         self.stop_words = []
         if (os.path.isfile(stop_words_file)):
@@ -21,9 +22,13 @@ class MessageReader:
         self.chain_length = chain_length
         self.start_string = start_string
         self.end_string = end_string
+        self.limit_end_message = limit_end_message
+        self.absolute_end_message = absolute_end_message + 2 # to account for start/end strings
         self.markov_chain = {}
         self.markov_word_count = 0
         self.markov_message_count = 0
+        self.markov_start_date = None
+        self.markov_end_date = None
 
         # total counts
         self.total_no_messages = 0
@@ -33,8 +38,10 @@ class MessageReader:
         self.trigram_phrases = 0
         self.threshold = threshold
 
-        # text specific
+        # filenames specified by txt (whatsapp) or json (facebook)
         self.names = names
+        self.txt_names = txt_names
+        self.json_names = json_names
         self.skip = [self.tokenise(w) for w in skip]
 
         # date time 
@@ -52,6 +59,24 @@ class MessageReader:
         self.bigram_term_frequency_names = {}
         self.trigram_total_term_frequency = {}
         self.trigram_term_frequency_names = {}
+        
+        # load markov_chain from existing json and metadata information
+        markov_file = 'markov_chain_{}.json'.format(self.chain_length)
+        if os.path.isfile(markov_file):
+            markov = self.load_json_dict(markov_file)
+            self.markov_chain = markov
+        
+        markov_metadata_file = 'markov_chain_metadata_{}.json'.format(self.chain_length)
+        if os.path.isfile(markov_metadata_file):
+            markov_metadata = self.load_json_dict(markov_metadata_file)
+            self.markov_message_count = markov_metadata['total_message_count']
+            self.markov_word_count = markov_metadata['total_word_count']
+            self.markov_start_date = arrow.get(markov_metadata['start_date'])
+            self.markov_end_date = arrow.get(markov_metadata['end_date'])
+        
+        # automatically call read all messages if txt_names and json_names are populated
+        if txt_names or json_names:
+            self.read_all_messages()
 
     # Read Stop Words
     def read_stop_words(self, stop_words_file):
@@ -71,7 +96,6 @@ class MessageReader:
 
         self.start_date = None
         self.end_date = None
-        self.updated = arrow.utcnow()
 
         self.messages_per_person = {}
         self.sum_message_length = {}
@@ -91,8 +115,29 @@ class MessageReader:
     def tokenise(self, word):
         return ''.join(ch for ch in word.lower() if ch.isalnum() or ch in emoji.UNICODE_EMOJI or ch=='-' or ch =='\'')
 
+    # Given a set of filenames (txt and/or json formats) parses the messages for all
+    # Outputs statistics files and  builds a markov chain
+    def read_all_messages(self):
+        # read all txt files
+        for name in self.txt_names:
+            self.read_all_messages_in_dir('./{}'.format(name), json=False)
+            self.write_stat_text_files(name)
+            self.write_stat_json_files(name)
+            self.reset()
+        
+        # read all json files
+        for name in self.json_names:
+            self.read_all_messages_in_dir('./{}'.format(name))
+            self.write_stat_text_files(name)
+            self.write_stat_json_files(name)
+            self.reset()
+
+        # build markov chain
+        self.write_markov_metadata()
+        self.write_dict_json(self.markov_chain, 'markov_chain_{}.json'.format(self.chain_length))
+
     # Reads all the messages in a directory
-    def read_all_messages(self, message_dir, json=True):
+    def read_all_messages_in_dir(self, message_dir, json=True):
         if os.path.isdir(message_dir):
             message_files = os.listdir(message_dir)
         else:
@@ -109,10 +154,24 @@ class MessageReader:
             else:
                 print("Invalid file provided: {}".format(file))
                 continue
-
+        
+        # Calculate total word and average message lengths
         for name in self.names:
             self.total_word_count += self.sum_message_length[name]
             self.average_message_length[name] = int(self.sum_message_length[name]/self.messages_per_person[name])
+        
+        # Update start and end date for markov data
+        if self.markov_start_date is not None: 
+            if self.start_date < self.markov_start_date:
+                self.markov_start_date = self.start_date
+        else:
+            self.markov_start_date = self.start_date
+
+        if self.markov_end_date is not None: 
+            if self.end_date > self.markov_end_date:
+                self.markov_end_date = self.end_date
+        else:
+            self.markov_end_date = self.end_date
 
     # Reads a json file and saves the messages in a dictionary
     def read_json(self, filename):
@@ -212,7 +271,7 @@ class MessageReader:
     # Build markov chain with context        
     def build_markov_chain(self, split_content):
         # tokenise words and remove links
-        words = [self.tokenise(w) for w in split_content if len(self.tokenise(w)) > 0 and not self.tokenise(w).startswith('http')]
+        words = [self.tokenise(w) for w in split_content if len(self.tokenise(w)) > 0 and not self.tokenise(w).startswith('http') and self.tokenise(w) not in self.skip]
         if len(words) > self.chain_length:
             # update counts
             self.markov_message_count += 1
@@ -244,10 +303,48 @@ class MessageReader:
                     self.markov_chain[context][next_word] = 0
                 self.markov_chain[context][next_word] += 1
 
-    #TODO Generate messages using markov chain
     def generate_message(self):
-        # don't forget limiting length! and possibly including a lower level threshold
-        pass    
+        # Generate first word and add to the message
+        message = [self.start_string]
+        start = self.markov_chain[self.start_string]
+
+        # Filter low frequencies based on the threshold
+        start_words = list(start.keys())
+        start_weights = list(start.values())
+
+        # randomly select start word using the frequency of the word as weight
+        first_word = random.choices(start_words, weights=start_weights)
+        message.extend(first_word)
+
+        i = 0
+        # build while haven't reached the end_string and length of message hasn't reached absolute limit
+        while((not message[-1] == self.end_string) and len(message) < self.absolute_end_message):
+            # current context is the chain_length
+            context = ' '.join(message[i:i+self.chain_length])
+            if(context not in self.markov_chain):
+                break
+            next = self.markov_chain[context]
+            
+            # If the first length limit of the message is reached, start to favour the end_string
+            if len(message) >= self.limit_end_message:
+                if self.end_string in next:
+                    next[self.end_string] += 10
+            
+            # randomly select next word using the frequency of the word as weight
+            next_words = list(next.keys())
+            next_weights = list(next.values())
+            next_word = random.choices(next_words, weights=next_weights)
+            message.extend(next_word)
+
+            i+=1
+
+        # Delete start and end strings and return a string
+        message.pop(0)
+        message[0].capitalize()
+        if message[-1] == self.end_string:
+            message.pop(-1)
+
+        return ' '.join(message)
 
     # Analyses the frequencies of terms, bigrams and trigrams given a list of words
     def analyse_content(self, split_content, sender_name):
@@ -324,21 +421,16 @@ class MessageReader:
         self.write_dict_json(self.trigram_total_term_frequency, '{}/{}_trigram_stats.json'.format(dir_name,friend))
 
     # Writes Markov chain to text file for readability
-    def write_markov_txt(self):
-        with open('markov_chain.txt', 'w') as f_write:
-            f_write.write('MARKOV CHAIN')
-            f_write.write('\n\n')
+    def write_markov_metadata(self):
+        markov_metadata = {}
+        markov_metadata['chain_length'] = self.chain_length
+        markov_metadata['total_message_count'] = self.markov_message_count
+        markov_metadata['total_word_count'] = self.markov_word_count
+        markov_metadata['start_date'] = self.markov_start_date.format('YYYY-MM-DD HH:mm:ss')
+        markov_metadata['end_date'] = self.markov_end_date.format('YYYY-MM-DD HH:mm:ss')
+        markov_metadata['last_updated'] = self.updated.format('YYYY-MM-DD HH:mm:ss')
 
-            f_write.write(str('Total Message Count: %d' % self.markov_message_count))
-            f_write.write('\n')
-
-            f_write.write(str('Total Word Count: %d' % self.markov_word_count))
-            f_write.write('\n\n')
-
-            for context, next_word in self.markov_chain.items():
-                for word, frequency in next_word.items():
-                    f_write.write(str('%s: %s, %d'% (context, word, frequency)))
-                    f_write.write('\n')
+        self.write_dict_json(markov_metadata, 'markov_chain_metadata_{}.json'.format(self.chain_length))
 
     # Writes the metadata file in a readable text format
     def write_metadata(self, friend):
@@ -463,23 +555,6 @@ class MessageReader:
                         f_write.write(str('%s: %s'% (name,self.trigram_term_frequency_names[word][name])))
                         f_write.write('\n')
 
+#reader = MessageReader('englishST.txt', names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'], txt_names=['Gina'], json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'])
 reader = MessageReader('englishST.txt', names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'])
-reader.read_all_messages('./Gina',json=False)
-reader.write_stat_text_files('Gina')
-reader.reset()
-
-names = ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan']
-for name in names:
-    reader.read_all_messages('./{}'.format(name))
-    reader.write_stat_text_files(name)
-    reader.write_stat_json_files(name)
-    reader.reset()
-
-reader.write_markov_txt()
-reader.write_dict_json(reader.markov_chain, 'markov.json')
-
-#reader = MessageReader('englishST.txt')
-#sentence = 'Hello everyone, I love you all'
-#reader.build_markov_chain(sentence.split())
-#reader.write_markov_txt()
-#reader.write_dict_json(reader.markov_chain, 'markov.json')
+print(reader.generate_message())
