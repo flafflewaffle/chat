@@ -22,6 +22,8 @@ class MessageReader:
         self.start_string = start_string
         self.end_string = end_string
         self.markov_chain = {}
+        self.markov_word_count = 0
+        self.markov_message_count = 0
 
         # total counts
         self.total_no_messages = 0
@@ -208,8 +210,14 @@ class MessageReader:
 
     # Build markov chain with context        
     def build_markov_chain(self, split_content):
+        # tokenise words and remove links
         words = [self.tokenise(w) for w in split_content if len(self.tokenise(w)) > 0 and not self.tokenise(w).startswith('http')]
         if len(words) > self.chain_length:
+            # update counts
+            self.markov_message_count += 1
+            self.markov_word_count += len(words)
+
+            # add start string to markov chain and first word
             if self.start_string not in self.markov_chain:
                 self.markov_chain[self.start_string] = {}
             first_word = words[0]
@@ -217,9 +225,13 @@ class MessageReader:
                 self.markov_chain[self.start_string][first_word] = 0
             self.markov_chain[self.start_string][first_word] += 1
 
+            # add start and end string to the sentence
             words.insert(0, self.start_string)
             words.append(self.end_string)
 
+            # find the full phrase being of length chain_length+1
+            # where the context is the first chain_length words and the next_word is the last word in the phrase
+            # update markov chain frequencies
             for i in range(len(words) - self.chain_length):
                 phrase = words[i:i+self.chain_length+1]
                 context = tuple(phrase[0:self.chain_length])
@@ -230,7 +242,12 @@ class MessageReader:
                 if next_word not in self.markov_chain[context]:
                     self.markov_chain[context][next_word] = 0
                 self.markov_chain[context][next_word] += 1
-        
+
+    #TODO Generate messages using markov chain
+    def generate_message(self):
+        # don't forget limiting length! and possibly including a lower level threshold
+        pass    
+
     # Analyses the frequencies of terms, bigrams and trigrams given a list of words
     def analyse_content(self, split_content, sender_name):
         self.sum_message_length[sender_name] += len(split_content)
@@ -304,6 +321,12 @@ class MessageReader:
          # Write Single Term Frequency file
         with open('markov_chain.txt', 'w') as f_write:
             f_write.write('MARKOV CHAIN')
+            f_write.write('\n\n')
+
+            f_write.write(str('Total Message Count: %d' % self.markov_message_count))
+            f_write.write('\n')
+
+            f_write.write(str('Total Word Count: %d' % self.markov_word_count))
             f_write.write('\n\n')
 
             for context, next_word in self.markov_chain.items():
@@ -433,3 +456,21 @@ class MessageReader:
                         f_write.write('\t')
                         f_write.write(str('%s: %s'% (name,self.trigram_term_frequency_names[word][name])))
                         f_write.write('\n')
+
+reader = MessageReader('englishST.txt', names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'])
+reader.read_all_messages('./Gina',json=False)
+reader.write_stat_text_files('Gina')
+reader.reset()
+
+names = ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan']
+for name in names:
+    reader.read_all_messages('./{}'.format(name))
+    reader.write_stat_text_files(name)
+    reader.reset()
+
+reader.write_markov()
+
+#reader = MessageReader('englishST.txt')
+#sentence = 'Hello everyone, I love you all'
+#reader.build_markov_chain(sentence.split())
+#reader.write_markov()
