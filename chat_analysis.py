@@ -111,6 +111,7 @@ class MessageReader:
                 continue
 
         for name in self.names:
+            self.total_word_count += self.sum_message_length[name]
             self.average_message_length[name] = int(self.sum_message_length[name]/self.messages_per_person[name])
 
     # Reads a json file and saves the messages in a dictionary
@@ -234,7 +235,7 @@ class MessageReader:
             # update markov chain frequencies
             for i in range(len(words) - self.chain_length):
                 phrase = words[i:i+self.chain_length+1]
-                context = tuple(phrase[0:self.chain_length])
+                context = ' '.join(phrase[0:self.chain_length])
                 next_word = phrase[self.chain_length]
 
                 if context not in self.markov_chain:
@@ -255,7 +256,6 @@ class MessageReader:
         for word in split_content:
             term = self.tokenise(word)
             if(len(term) > 0 and term not in self.stop_words and term not in self.skip):
-                self.total_word_count += 1
                 if (term not in self.total_term_frequency):
                     self.total_term_frequency[term] = 0
                     self.vocabulary_size += 1
@@ -303,9 +303,15 @@ class MessageReader:
     #-----              WRITE OUTPUT FILES           ----------#
     ############################################################
 
+    # Write any dictionary to json file
     def write_dict_json(self, input_dict, output_file):
         with open(output_file, 'w') as json_file:
             json.dump(input_dict, json_file)
+
+    # loads dict from json and returns the dict to be used
+    def load_json_dict(self, json_file):
+        with open(json_file, 'r') as json_file:
+            return json.load(json_file)
 
     # Writes out the message stats in json files
     def write_stat_json_files(self, friend):
@@ -317,8 +323,8 @@ class MessageReader:
         self.write_dict_json(self.bigram_total_term_frequency, '{}/{}_bigram_stats.json'.format(dir_name,friend))
         self.write_dict_json(self.trigram_total_term_frequency, '{}/{}_trigram_stats.json'.format(dir_name,friend))
 
-    def write_markov(self):
-         # Write Single Term Frequency file
+    # Writes Markov chain to text file for readability
+    def write_markov_txt(self):
         with open('markov_chain.txt', 'w') as f_write:
             f_write.write('MARKOV CHAIN')
             f_write.write('\n\n')
@@ -331,7 +337,7 @@ class MessageReader:
 
             for context, next_word in self.markov_chain.items():
                 for word, frequency in next_word.items():
-                    f_write.write(str('%s: %s, %d'% (str(context), word, frequency)))
+                    f_write.write(str('%s: %s, %d'% (context, word, frequency)))
                     f_write.write('\n')
 
     # Writes the metadata file in a readable text format
@@ -466,11 +472,14 @@ names = ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan']
 for name in names:
     reader.read_all_messages('./{}'.format(name))
     reader.write_stat_text_files(name)
+    reader.write_stat_json_files(name)
     reader.reset()
 
-reader.write_markov()
+reader.write_markov_txt()
+reader.write_dict_json(reader.markov_chain, 'markov.json')
 
 #reader = MessageReader('englishST.txt')
 #sentence = 'Hello everyone, I love you all'
 #reader.build_markov_chain(sentence.split())
-#reader.write_markov()
+#reader.write_markov_txt()
+#reader.write_dict_json(reader.markov_chain, 'markov.json')
