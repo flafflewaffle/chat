@@ -12,7 +12,7 @@ import random
 ############################################################
 
 class MessageReader:
-    def __init__(self, stop_words_file, chain_length=2, limit_end_message=10, absolute_end_message=15, start_string =  '__START__', end_string='__END__', threshold=1, names=[], skip=[], txt_names=[], json_names=[]):
+    def __init__(self, stop_words_file, chain_length=2, limit_end_message=10, absolute_end_message=15, start_string='__START__', end_string='__END__', threshold=1, names=[], skip=[], txt_names=[], json_names=[] rebuild=False):
         # stop words
         self.stop_words = []
         if (os.path.isfile(stop_words_file)):
@@ -29,6 +29,7 @@ class MessageReader:
         self.markov_message_count = 0
         self.markov_start_date = None
         self.markov_end_date = None
+        self.rebuild = rebuild
 
         # total counts
         self.total_no_messages = 0
@@ -60,19 +61,20 @@ class MessageReader:
         self.trigram_total_term_frequency = {}
         self.trigram_term_frequency_names = {}
         
-        # load markov_chain from existing json and metadata information
-        markov_file = 'markov_chain_{}.json'.format(self.chain_length)
-        if os.path.isfile(markov_file):
-            markov = self.load_json_dict(markov_file)
-            self.markov_chain = markov
-        
-        markov_metadata_file = 'markov_chain_metadata_{}.json'.format(self.chain_length)
-        if os.path.isfile(markov_metadata_file):
-            markov_metadata = self.load_json_dict(markov_metadata_file)
-            self.markov_message_count = markov_metadata['total_message_count']
-            self.markov_word_count = markov_metadata['total_word_count']
-            self.markov_start_date = arrow.get(markov_metadata['start_date'])
-            self.markov_end_date = arrow.get(markov_metadata['end_date'])
+        # load markov_chain from existing json and metadata information if not rebuilding
+        if not self.rebuild:
+            markov_file = 'markov_chain_{}.json'.format(self.chain_length)
+            if os.path.isfile(markov_file):
+                markov = self.load_json_dict(markov_file)
+                self.markov_chain = markov
+            
+            markov_metadata_file = 'markov_chain_metadata_{}.json'.format(self.chain_length)
+            if os.path.isfile(markov_metadata_file):
+                markov_metadata = self.load_json_dict(markov_metadata_file)
+                self.markov_message_count = markov_metadata['total_message_count']
+                self.markov_word_count = markov_metadata['total_word_count']
+                self.markov_start_date = arrow.get(markov_metadata['start_date'])
+                self.markov_end_date = arrow.get(markov_metadata['end_date'])
         
         # automatically call read all messages if txt_names and json_names are populated
         if txt_names or json_names:
@@ -161,13 +163,13 @@ class MessageReader:
             self.average_message_length[name] = int(self.sum_message_length[name]/self.messages_per_person[name])
         
         # Update start and end date for markov data
-        if self.markov_start_date is not None: 
+        if self.markov_start_date is not None and self.start_date is not None: 
             if self.start_date < self.markov_start_date:
                 self.markov_start_date = self.start_date
         else:
             self.markov_start_date = self.start_date
 
-        if self.markov_end_date is not None: 
+        if self.markov_end_date is not None and self.end_date is not None: 
             if self.end_date > self.markov_end_date:
                 self.markov_end_date = self.end_date
         else:
@@ -184,7 +186,7 @@ class MessageReader:
         messages_json = self.read_json(message_file)
         print('Retrieving Names')
         participants = messages_json["participants"]
-        self.names = [name for participant in participants for (key,name) in participant.items()]
+        self.names = [name.split()[0] for participant in participants for (key,name) in participant.items()]
         print('Reading Messages For, ', self.names)
 
         for name in self.names:
@@ -212,7 +214,7 @@ class MessageReader:
                 self.end_date = date
 
             # Update counts for message and calls analyse content for stats
-            sender_name = message["sender_name"]
+            sender_name = message["sender_name"].split()[0]
             if "content" in message:
                 content = message["content"]
 
@@ -556,6 +558,6 @@ class MessageReader:
                         f_write.write(str('%s: %s'% (name,self.trigram_term_frequency_names[word][name])))
                         f_write.write('\n')
 
-#reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'], txt_names=['Gina'], json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'])
+reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'], txt_names=['Gina'], json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'], rebuild=True)
 reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'])
 print(reader.generate_message())
