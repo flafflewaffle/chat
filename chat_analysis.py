@@ -186,7 +186,7 @@ class MessageReader:
         messages_json = self.read_json(message_file)
         print('Retrieving Names')
         participants = messages_json["participants"]
-        self.names = [name.split()[0] for participant in participants for (key,name) in participant.items()]
+        self.names = [name for participant in participants for (key,name) in participant.items()]
         print('Reading Messages For, ', self.names)
 
         for name in self.names:
@@ -214,7 +214,7 @@ class MessageReader:
                 self.end_date = date
 
             # Update counts for message and calls analyse content for stats
-            sender_name = message["sender_name"].split()[0]
+            sender_name = message["sender_name"]
             if "content" in message:
                 content = message["content"]
 
