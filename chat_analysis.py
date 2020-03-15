@@ -12,7 +12,7 @@ import random
 ############################################################
 
 class MessageReader:
-    def __init__(self, stop_words_file, chain_length=2, limit_end_message=10, absolute_end_message=15, start_string='__START__', end_string='__END__', threshold=1, names=[], skip=[], txt_names=[], json_names=[] rebuild=False):
+    def __init__(self, stop_words_file, chain_length=2, limit_end_message=10, absolute_end_message=15, start_string='__START__', end_string='__END__', threshold=1, names=[], skip=[], txt_names=[], json_names=[], rebuild=False):
         # stop words
         self.stop_words = []
         if (os.path.isfile(stop_words_file)):
@@ -75,6 +75,8 @@ class MessageReader:
                 self.markov_word_count = markov_metadata['total_word_count']
                 self.markov_start_date = arrow.get(markov_metadata['start_date'])
                 self.markov_end_date = arrow.get(markov_metadata['end_date'])
+        else:
+            print('Rebuilding Markov Chain with Chain Length {}'.format(self.chain_length))
         
         # automatically call read all messages if txt_names and json_names are populated
         if txt_names or json_names:
@@ -558,6 +560,6 @@ class MessageReader:
                         f_write.write(str('%s: %s'% (name,self.trigram_term_frequency_names[word][name])))
                         f_write.write('\n')
 
-reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'], txt_names=['Gina'], json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'], rebuild=True)
+#reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'], txt_names=['Gina'], json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'], rebuild=True)
 reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'])
 print(reader.generate_message())
