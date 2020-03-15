@@ -272,7 +272,7 @@ class MessageReader:
     def build_markov_chain(self, split_content):
         # tokenise words and remove links
         words = [self.tokenise(w) for w in split_content if len(self.tokenise(w)) > 0 and not self.tokenise(w).startswith('http') and self.tokenise(w) not in self.skip]
-        if len(words) > self.chain_length:
+        if len(words) > self.chain_length-2:
             # update counts
             self.markov_message_count += 1
             self.markov_word_count += len(words)
@@ -280,7 +280,8 @@ class MessageReader:
             # add start string to markov chain and first word
             if self.start_string not in self.markov_chain:
                 self.markov_chain[self.start_string] = {}
-            first_word = words[0]
+            # first word(s) should be of length chain_length-1
+            first_word = ' '.join(words[0:self.chain_length-1])
             if first_word not in self.markov_chain[self.start_string]:
                 self.markov_chain[self.start_string][first_word] = 0
             self.markov_chain[self.start_string][first_word] += 1
@@ -304,17 +305,18 @@ class MessageReader:
                 self.markov_chain[context][next_word] += 1
 
     def generate_message(self):
+        print('Generating sentence using chain length of {}'.format(self.chain_length))
         # Generate first word and add to the message
         message = [self.start_string]
         start = self.markov_chain[self.start_string]
 
-        # Filter low frequencies based on the threshold
         start_words = list(start.keys())
         start_weights = list(start.values())
 
         # randomly select start word using the frequency of the word as weight
         first_word = random.choices(start_words, weights=start_weights)
-        message.extend(first_word)
+        start_key = first_word[0].split()
+        message.extend(start_key)
 
         i = 0
         # build while haven't reached the end_string and length of message hasn't reached absolute limit
@@ -340,11 +342,10 @@ class MessageReader:
 
         # Delete start and end strings and return a string
         message.pop(0)
-        message[0].capitalize()
         if message[-1] == self.end_string:
             message.pop(-1)
 
-        return ' '.join(message)
+        return ' '.join(message).capitalize()
 
     # Analyses the frequencies of terms, bigrams and trigrams given a list of words
     def analyse_content(self, split_content, sender_name):
@@ -555,6 +556,6 @@ class MessageReader:
                         f_write.write(str('%s: %s'% (name,self.trigram_term_frequency_names[word][name])))
                         f_write.write('\n')
 
-#reader = MessageReader('englishST.txt', names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'], txt_names=['Gina'], json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'])
-reader = MessageReader('englishST.txt', names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'])
+#reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'], txt_names=['Gina'], json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'])
+reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'])
 print(reader.generate_message())
