@@ -12,7 +12,7 @@ import random
 ############################################################
 
 class MessageReader:
-    def __init__(self, stop_words_file, chain_length=2, limit_end_message=10, absolute_end_message=15, start_string='__START__', end_string='__END__', threshold=1, names=[], skip=[], txt_names=[], json_names=[], rebuild=False):
+    def __init__(self, stop_words_file, chain_length=2, limit_end_message=12, absolute_end_message=20, start_string='__START__', end_string='__END__', threshold=1, names=[], skip=[], txt_names=[], json_names=[], rebuild=False):
         # stop words
         self.stop_words = []
         if (os.path.isfile(stop_words_file)):
@@ -126,14 +126,12 @@ class MessageReader:
         for name in self.txt_names:
             self.read_all_messages_in_dir('./{}'.format(name), json=False)
             self.write_stat_text_files(name)
-            self.write_stat_json_files(name)
             self.reset()
         
         # read all json files
         for name in self.json_names:
             self.read_all_messages_in_dir('./{}'.format(name))
             self.write_stat_text_files(name)
-            self.write_stat_json_files(name)
             self.reset()
 
         # build markov chain
@@ -200,6 +198,11 @@ class MessageReader:
                 self.average_message_length[name] = 0
 
         messages = messages_json["messages"]
+        current_sender = ''
+        previous_sender = ''
+        current_messages = []
+        previous_messages = []
+
         for message in messages:
             
             # Update start and end date
@@ -217,15 +220,23 @@ class MessageReader:
 
             # Update counts for message and calls analyse content for stats
             sender_name = message["sender_name"]
+
+            if current_sender != sender_name:
+                previous_sender = current_sender
+                self.build_markov_chain(previous_messages)
+                current_messages = previous_messages
+                previous_messages = []
+                current_sender = sender_name
+
             if "content" in message:
-                content = message["content"]
+                current_message = message["content"]
+                previous_messages.append(current_message)
 
                 # Message counts
                 self.total_no_messages += 1
                 self.messages_per_person[sender_name] += 1
 
-                split_content = content.split()
-                self.build_markov_chain(split_content)
+                split_content = current_message.split()
                 self.analyse_content(split_content, sender_name)
     
     # Reads and analyses the frequencies of messages (provided a txt file)
@@ -239,6 +250,10 @@ class MessageReader:
                 self.sum_message_length[name] = 0
             if(name not in self.average_message_length):
                 self.average_message_length[name] = 0
+        current_sender = ''
+        previous_sender = ''
+        current_messages = []
+        previous_messages = []
 
         with open(message_file, 'r') as f_read:
             for line in f_read:
@@ -254,18 +269,30 @@ class MessageReader:
                         if(split_content[2] != '-'):
                             sender_name = split_content[2]
                             split_content = split_content[3:]
+                            current_message = ' '.join(split_content)
                             if(sender_name[-1] == ':'):
                                 sender_name = sender_name[:-1]
                         else:
                             sender_name = split_content[3]
                             split_content = split_content[4:]
+                            current_message = ' '.join(split_content)
                             if(sender_name[-1] == ':'):
                                 sender_name = sender_name[:-1]
+                    else:
+                        current_message = ' '.join(split_content)
+
+                previous_messages.append(current_message)
+
+                if current_sender != sender_name:
+                    previous_sender = current_sender
+                    self.build_markov_chain(previous_messages)
+                    current_messages = previous_messages
+                    previous_messages = []
+                    current_sender = sender_name
 
                 # Message counts
                 self.total_no_messages += 1
                 self.messages_per_person[sender_name] += 1
-                self.build_markov_chain(split_content)
                 self.analyse_content(split_content, sender_name)
 
     ############################################################
@@ -273,23 +300,49 @@ class MessageReader:
     ############################################################
 
     # Build markov chain with context        
-    def build_markov_chain(self, split_content):
+    def build_markov_chain(self, messages):
         # tokenise words and remove links
+        #print('Previous', previous_messages)
+        #print('Current', current_messages) 
+
+        for message in messages:
+            # Split the message into chain lengths
+            chain = self.chain_message(message)
+            
+            if chain:
+                # update counts
+                self.markov_message_count += 1
+                self.markov_word_count += self.chain_length + len(chain)-2
+
+                # add start string to markov chain and first word
+                if self.start_string not in self.markov_chain:
+                    self.markov_chain[self.start_string] = {}
+                first_word = ' '.join(chain[0][1:self.chain_length])
+                if first_word not in self.markov_chain[self.start_string]:
+                    self.markov_chain[self.start_string][first_word] = 0
+                self.markov_chain[self.start_string][first_word] += 1
+
+                # iterate through all chain links
+                for link in chain:
+                    context = ' '.join(link[0:self.chain_length])
+                    next_word = link[self.chain_length]
+
+                    # update markov chain
+                    if context not in self.markov_chain:
+                        self.markov_chain[context] = {}
+                    if next_word not in self.markov_chain[context]:
+                        self.markov_chain[context][next_word] = 0
+                    self.markov_chain[context][next_word] += 1
+
+    # splits a message and returns a list of chain lengths
+    def chain_message(self, message):
+        chain = []
+        split_content = message.split()
         words = [self.tokenise(w) for w in split_content if len(self.tokenise(w)) > 0 and not self.tokenise(w).startswith('http') and self.tokenise(w) not in self.skip]
         if len(words) > self.chain_length-2:
-            # update counts
-            self.markov_message_count += 1
-            self.markov_word_count += len(words)
-
-            # add start string to markov chain and first word
-            if self.start_string not in self.markov_chain:
-                self.markov_chain[self.start_string] = {}
             # first word(s) should be of length chain_length-1
             first_word = ' '.join(words[0:self.chain_length-1])
-            if first_word not in self.markov_chain[self.start_string]:
-                self.markov_chain[self.start_string][first_word] = 0
-            self.markov_chain[self.start_string][first_word] += 1
-
+            
             # add start and end string to the sentence
             words.insert(0, self.start_string)
             words.append(self.end_string)
@@ -299,14 +352,8 @@ class MessageReader:
             # update markov chain frequencies
             for i in range(len(words) - self.chain_length):
                 phrase = words[i:i+self.chain_length+1]
-                context = ' '.join(phrase[0:self.chain_length])
-                next_word = phrase[self.chain_length]
-
-                if context not in self.markov_chain:
-                    self.markov_chain[context] = {}
-                if next_word not in self.markov_chain[context]:
-                    self.markov_chain[context][next_word] = 0
-                self.markov_chain[context][next_word] += 1
+                chain.append(phrase)
+        return chain
 
     def generate_message(self):
         print('Generating sentence using chain length of {}'.format(self.chain_length))
@@ -330,7 +377,7 @@ class MessageReader:
             if(context not in self.markov_chain):
                 break
             next = self.markov_chain[context]
-            
+
             # If the first length limit of the message is reached, start to favour the end_string
             if len(message) >= self.limit_end_message:
                 if self.end_string in next:
@@ -561,5 +608,6 @@ class MessageReader:
                         f_write.write('\n')
 
 #reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'], txt_names=['Gina'], json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'], rebuild=True)
+#reader = MessageReader('englishST.txt', chain_length=3, json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'], rebuild=True)
 reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'])
 print(reader.generate_message())
