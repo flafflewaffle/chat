@@ -3,6 +3,7 @@ import json
 import os
 import operator
 import collections
+import hashlib
 import arrow
 import emoji
 import random
@@ -12,7 +13,7 @@ import random
 ############################################################
 
 class MessageReader:
-    def __init__(self, stop_words_file, chain_length=2, limit_end_message=12, absolute_end_message=20, start_string='__START__', end_string='__END__', threshold=1, names=[], skip=[], txt_names=[], json_names=[], rebuild=False):
+    def __init__(self, stop_words_file, chain_length=2, limit_end_message=12, absolute_end_message=20, start_string='__START__', end_string='__END__', threshold=1, names=[], skip=[], txt_names=[], json_names=[], num_files=10, rebuild=False):
         # stop words
         self.stop_words = []
         if (os.path.isfile(stop_words_file)):
@@ -43,6 +44,7 @@ class MessageReader:
         self.names = names
         self.txt_names = txt_names
         self.json_names = json_names
+        self.num_files = num_files
         self.skip = [self.tokenise(w) for w in skip]
 
         # date time 
@@ -118,6 +120,22 @@ class MessageReader:
     # Retrieve the alphanumeric characters in lowercase
     def tokenise(self, word):
         return ''.join(ch for ch in word.lower() if ch.isalnum() or ch in emoji.UNICODE_EMOJI or ch=='-' or ch =='\'')
+
+    # Returns the file index for a term
+    def hash_term(self, term):
+        hash = hashlib.md5(term.encode())
+        return int(hash.hexdigest(), 16) % self.num_files
+    
+    # Returns dict of relevant files->terms for a list of terms. Used to minimise the number of calls to open/close a file.
+    def relevant_files(self, terms, formatter):
+        files = {}
+        for term in terms:
+            file_no = self.hash_term(term)
+            file_name = formatter(file_no)
+            if file_name not in files:
+                files[file_name] = []
+            files[file_name].append(term)
+        return files
 
     # Given a set of filenames (txt and/or json formats) parses the messages for all
     # Outputs statistics files and  builds a markov chain
@@ -299,12 +317,8 @@ class MessageReader:
     #-----              ANALYSIS FUNCTIONS           ----------#
     ############################################################
 
-    # Build markov chain with context        
+    # Build markov chain
     def build_markov_chain(self, messages):
-        # tokenise words and remove links
-        #print('Previous', previous_messages)
-        #print('Current', current_messages) 
-
         for message in messages:
             # Split the message into chain lengths
             chain = self.chain_message(message)
@@ -333,11 +347,18 @@ class MessageReader:
                     if next_word not in self.markov_chain[context]:
                         self.markov_chain[context][next_word] = 0
                     self.markov_chain[context][next_word] += 1
+    
+    # build context model
+    def build_context(self, previous_messages, current_messages):
+        #print('Previous', previous_messages)
+        #print('Current', current_messages) 
+        pass
 
     # splits a message and returns a list of chain lengths
     def chain_message(self, message):
         chain = []
         split_content = message.split()
+        # tokenise and remove links
         words = [self.tokenise(w) for w in split_content if len(self.tokenise(w)) > 0 and not self.tokenise(w).startswith('http') and self.tokenise(w) not in self.skip]
         if len(words) > self.chain_length-2:
             # first word(s) should be of length chain_length-1
