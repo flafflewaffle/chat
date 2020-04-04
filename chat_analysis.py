@@ -4,6 +4,7 @@ import os
 import operator
 import collections
 import hashlib
+import itertools
 import arrow
 import emoji
 import random
@@ -13,7 +14,7 @@ import random
 ############################################################
 
 class MessageReader:
-    def __init__(self, stop_words_file, chain_length=2, limit_end_message=12, absolute_end_message=20, start_string='__START__', end_string='__END__', threshold=1, names=[], skip=[], txt_names=[], json_names=[], num_files=10, rebuild=False):
+    def __init__(self, stop_words_file, chain_length=2, limit_end_message=12, absolute_end_message=20, start_string='__START__', end_string='__END__', threshold=1, names=[], skip=[], txt_names=[], json_names=[], num_files=10, build=False):
         # stop words
         self.stop_words = []
         if (os.path.isfile(stop_words_file)):
@@ -26,11 +27,12 @@ class MessageReader:
         self.limit_end_message = limit_end_message
         self.absolute_end_message = absolute_end_message + 2 # to account for start/end strings
         self.markov_chain = {}
+        self.markov_context = {}
         self.markov_word_count = 0
         self.markov_message_count = 0
         self.markov_start_date = None
         self.markov_end_date = None
-        self.rebuild = rebuild
+        self.build = build
 
         # total counts
         self.total_no_messages = 0
@@ -63,14 +65,14 @@ class MessageReader:
         self.trigram_total_term_frequency = {}
         self.trigram_term_frequency_names = {}
         
-        # load markov_chain from existing json and metadata information if not rebuilding
-        if not self.rebuild:
-            markov_file = 'markov_chain_{}.json'.format(self.chain_length)
-            if os.path.isfile(markov_file):
-                markov = self.load_json_dict(markov_file)
-                self.markov_chain = markov
-            
-            markov_metadata_file = 'markov_chain_metadata_{}.json'.format(self.chain_length)
+        # create a markov chain if it doesn't already exist
+        self.markov_dir = './markov_chain_{}'.format(self.chain_length)
+        if not os.path.isdir(self.markov_dir):
+            os.mkdir(self.markov_dir)
+
+        # load markov metadata from existing json and metadata information if not building
+        if not self.build:    
+            markov_metadata_file = '{}/metadata.json'.format(self.markov_dir)
             if os.path.isfile(markov_metadata_file):
                 markov_metadata = self.load_json_dict(markov_metadata_file)
                 self.markov_message_count = markov_metadata['total_message_count']
@@ -81,8 +83,17 @@ class MessageReader:
             print('Rebuilding Markov Chain with Chain Length {}'.format(self.chain_length))
         
         # automatically call read all messages if txt_names and json_names are populated
-        if txt_names or json_names:
+        if (txt_names or json_names) and self.build:
+            # delete all files in markov model directory if rebuilding
+            for filename in os.listdir(self.markov_dir):
+                file_path = os.path.join(self.markov_dir, filename)
+                try:
+                    if os.path.isfile(file_path) or os.path.islink(file_path):
+                        os.unlink(file_path)
+                except Exception as e:
+                    print('Failed to delete %s. Reason: %s' % (file_path, e))
             self.read_all_messages()
+            
 
     # Read Stop Words
     def read_stop_words(self, stop_words_file):
@@ -121,6 +132,12 @@ class MessageReader:
     def tokenise(self, word):
         return ''.join(ch for ch in word.lower() if ch.isalnum() or ch in emoji.UNICODE_EMOJI or ch=='-' or ch =='\'')
 
+    def format_markov_chain_file(self, file_index):
+        return "{}/chain_{}.json".format(self.markov_dir, file_index)
+
+    def format_markov_context_file(self, file_index):
+        return "{}/context_{}.json".format(self.markov_dir, file_index)
+
     # Returns the file index for a term
     def hash_term(self, term):
         hash = hashlib.md5(term.encode())
@@ -130,7 +147,11 @@ class MessageReader:
     def relevant_files(self, terms, formatter):
         files = {}
         for term in terms:
-            file_no = self.hash_term(term)
+            # Create a special start file for the start_string otherwise use the hash function
+            if term == self.start_string:
+                file_no = 'start'
+            else:
+                file_no = self.hash_term(term)
             file_name = formatter(file_no)
             if file_name not in files:
                 files[file_name] = []
@@ -152,9 +173,8 @@ class MessageReader:
             self.write_stat_text_files(name)
             self.reset()
 
-        # build markov chain
+        # write metadata
         self.write_markov_metadata()
-        self.write_dict_json(self.markov_chain, 'markov_chain_{}.json'.format(self.chain_length))
 
     # Reads all the messages in a directory
     def read_all_messages_in_dir(self, message_dir, json=True):
@@ -174,6 +194,11 @@ class MessageReader:
             else:
                 print("Invalid file provided: {}".format(file))
                 continue
+
+            # update context files and reset the local variable
+            if self.markov_chain:
+                self.update_files(self.markov_chain, self.format_markov_chain_file)
+                self.markov_chain = {}
         
         # Calculate total word and average message lengths
         for name in self.names:
@@ -331,6 +356,7 @@ class MessageReader:
                 # add start string to markov chain and first word
                 if self.start_string not in self.markov_chain:
                     self.markov_chain[self.start_string] = {}
+                # first word(s) should be of length chain_length-1
                 first_word = ' '.join(chain[0][1:self.chain_length])
                 if first_word not in self.markov_chain[self.start_string]:
                     self.markov_chain[self.start_string][first_word] = 0
@@ -348,22 +374,35 @@ class MessageReader:
                         self.markov_chain[context][next_word] = 0
                     self.markov_chain[context][next_word] += 1
     
-    # build context model
-    def build_context(self, previous_messages, current_messages):
-        #print('Previous', previous_messages)
-        #print('Current', current_messages) 
-        pass
+    # update current context to files
+    def update_files(self, input_dict, formatter):
+        # group files to list of chain lengths
+        relevant_files = self.relevant_files(input_dict.keys(), formatter)
 
-    # splits a message and returns a list of chain lengths
+        for context_file, chains in relevant_files.items():
+            try:
+                # read existing relevant file and add chain lengths to it
+                relevant_dict = self.load_json_dict(context_file)
+
+                for chain in chains:
+                    if chain in relevant_dict:
+                        relevant_dict[chain].update(input_dict[chain])
+                    else:
+                        relevant_dict[chain] = input_dict[chain]
+            except (FileNotFoundError, EOFError):
+                #file not found, so create a new file alltogether
+                relevant_dict = {k: input_dict[k] for k in chains}
+
+            # write out to context file
+            self.write_dict_json(relevant_dict, context_file)
+
+    # splits a message and returns a list of chain lengths adding the start and end strings
     def chain_message(self, message):
         chain = []
         split_content = message.split()
         # tokenise and remove links
         words = [self.tokenise(w) for w in split_content if len(self.tokenise(w)) > 0 and not self.tokenise(w).startswith('http') and self.tokenise(w) not in self.skip]
-        if len(words) > self.chain_length-2:
-            # first word(s) should be of length chain_length-1
-            first_word = ' '.join(words[0:self.chain_length-1])
-            
+        if len(words) > self.chain_length-2:            
             # add start and end string to the sentence
             words.insert(0, self.start_string)
             words.append(self.end_string)
@@ -380,6 +419,7 @@ class MessageReader:
         print('Generating sentence using chain length of {}'.format(self.chain_length))
         # Generate first word and add to the message
         message = [self.start_string]
+        self.markov_chain = self.load_json_dict(self.format_markov_chain_file('start'))
         start = self.markov_chain[self.start_string]
 
         start_words = list(start.keys())
@@ -395,6 +435,8 @@ class MessageReader:
         while((not message[-1] == self.end_string) and len(message) < self.absolute_end_message):
             # current context is the chain_length
             context = ' '.join(message[i:i+self.chain_length])
+            context_index = self.hash_term(context)
+            self.markov_chain = self.load_json_dict(self.format_markov_chain_file(context_index))
             if(context not in self.markov_chain):
                 break
             next = self.markov_chain[context]
@@ -503,7 +545,7 @@ class MessageReader:
         markov_metadata['end_date'] = self.markov_end_date.format('YYYY-MM-DD HH:mm:ss')
         markov_metadata['last_updated'] = self.updated.format('YYYY-MM-DD HH:mm:ss')
 
-        self.write_dict_json(markov_metadata, 'markov_chain_metadata_{}.json'.format(self.chain_length))
+        self.write_dict_json(markov_metadata, '{}/metadata.json'.format(self.markov_dir))
 
     # Writes the metadata file in a readable text format
     def write_metadata(self, friend):
@@ -627,8 +669,15 @@ class MessageReader:
                         f_write.write('\t')
                         f_write.write(str('%s: %s'% (name,self.trigram_term_frequency_names[word][name])))
                         f_write.write('\n')
+# FULL BUILD
+#reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'], txt_names=['Gina'], json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'], build=True)
 
-#reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'], txt_names=['Gina'], json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'], rebuild=True)
-#reader = MessageReader('englishST.txt', chain_length=3, json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'], rebuild=True)
+# JSON ONLY TESTING
+#reader = MessageReader('englishST.txt', chain_length=3, json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'], build=True)
+
+# TEXT ONLY TESTING
+#reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'], txt_names=['Gina'], build=True)
+
+# MESSAGE GENERATION ONLY TESTING
 reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'])
 print(reader.generate_message())
