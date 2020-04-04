@@ -33,6 +33,7 @@ class MessageReader:
         self.markov_start_date = None
         self.markov_end_date = None
         self.build = build
+        self.filenames = []
 
         # total counts
         self.total_no_messages = 0
@@ -79,6 +80,7 @@ class MessageReader:
                 self.markov_word_count = markov_metadata['total_word_count']
                 self.markov_start_date = arrow.get(markov_metadata['start_date'])
                 self.markov_end_date = arrow.get(markov_metadata['end_date'])
+                self.filenames = markov_metadata['files']
         else:
             print('Rebuilding Markov Chain with Chain Length {}'.format(self.chain_length))
         
@@ -94,7 +96,6 @@ class MessageReader:
                     print('Failed to delete %s. Reason: %s' % (file_path, e))
             self.read_all_messages()
             
-
     # Read Stop Words
     def read_stop_words(self, stop_words_file):
         with open(stop_words_file, 'r') as f:
@@ -187,6 +188,7 @@ class MessageReader:
             file = '{}/{}'.format(message_dir, message_file)
             if not message_file.startswith('.') and os.path.isfile(file):
                 print('Reading ',file)
+                self.filenames.append(file)
                 if json:
                     self.read_messages_json(file)
                 else:
@@ -248,6 +250,10 @@ class MessageReader:
 
         for message in messages:
             
+            reaction = ''
+            if "reactions" in message:
+                reaction = message["reactions"][0]["reaction"]
+
             # Update start and end date
             date = arrow.get(message["timestamp_ms"]/1000)
             if self.start_date is not None: 
@@ -266,7 +272,7 @@ class MessageReader:
 
             if current_sender != sender_name:
                 previous_sender = current_sender
-                self.build_markov_chain(previous_messages)
+                self.build_markov_chain(previous_messages, reaction)
                 current_messages = previous_messages
                 previous_messages = []
                 current_sender = sender_name
@@ -328,7 +334,7 @@ class MessageReader:
 
                 if current_sender != sender_name:
                     previous_sender = current_sender
-                    self.build_markov_chain(previous_messages)
+                    self.build_markov_chain(previous_messages, '')
                     current_messages = previous_messages
                     previous_messages = []
                     current_sender = sender_name
@@ -343,7 +349,7 @@ class MessageReader:
     ############################################################
 
     # Build markov chain
-    def build_markov_chain(self, messages):
+    def build_markov_chain(self, messages, reaction):
         for message in messages:
             # Split the message into chain lengths
             chain = self.chain_message(message)
@@ -373,6 +379,10 @@ class MessageReader:
                     if next_word not in self.markov_chain[context]:
                         self.markov_chain[context][next_word] = 0
                     self.markov_chain[context][next_word] += 1
+                    if reaction:
+                        if reaction not in self.markov_chain[context]:
+                            self.markov_chain[context][reaction] = 0
+                        self.markov_chain[context][reaction] += 1
     
     # update current context to files
     def update_files(self, input_dict, formatter):
@@ -544,6 +554,7 @@ class MessageReader:
         markov_metadata['start_date'] = self.markov_start_date.format('YYYY-MM-DD HH:mm:ss')
         markov_metadata['end_date'] = self.markov_end_date.format('YYYY-MM-DD HH:mm:ss')
         markov_metadata['last_updated'] = self.updated.format('YYYY-MM-DD HH:mm:ss')
+        markov_metadata['files'] = self.filenames
 
         self.write_dict_json(markov_metadata, '{}/metadata.json'.format(self.markov_dir))
 
@@ -670,7 +681,7 @@ class MessageReader:
                         f_write.write(str('%s: %s'% (name,self.trigram_term_frequency_names[word][name])))
                         f_write.write('\n')
 # FULL BUILD
-#reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'], txt_names=['Gina'], json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'], build=True)
+reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'], txt_names=['Gina'], json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'], build=True)
 
 # JSON ONLY TESTING
 #reader = MessageReader('englishST.txt', chain_length=3, json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'], build=True)
@@ -679,5 +690,5 @@ class MessageReader:
 #reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'], txt_names=['Gina'], build=True)
 
 # MESSAGE GENERATION ONLY TESTING
-reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'])
+#reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'])
 print(reader.generate_message())
