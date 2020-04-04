@@ -139,12 +139,12 @@ class MessageReader:
         return ''.join(ch for ch in word.lower() if ch.isalnum() or ch in emoji.UNICODE_EMOJI or ch=='-' or ch =='\'')
 
     def preprocess(self, terms):
-        tokens = []
+        tokens = {}
         for token in terms.split():
             token = self.tokenise(token)
             if len(token) > 3 and token not in self.stop_words and token not in self.skip:
                 stem = self.stemmer.stem(self.lemmatizer.lemmatize(token))
-                tokens.append(stem)
+                tokens[stem] = token
         return tokens
 
     def format_markov_chain_file(self, file_index):
@@ -496,12 +496,15 @@ class MessageReader:
     def analyse_topics(self, messages):
         for message in messages:
             preprocess = self.preprocess(message)
-            for token in preprocess:
-                if token not in self.markov_context:
-                    self.markov_context[token] = 0
-                self.markov_context[token] += 1
+            tagged_tokens = nltk.pos_tag(list(preprocess.keys()))
+            for (token, tag) in tagged_tokens:
+                if tag == 'NN' or tag == 'VBP':
+                    word = self.tokenise(preprocess[token])
+                    if word not in self.markov_context:
+                        self.markov_context[word] = 0
+                    self.markov_context[word] += 1
 
-    # Analyses the frequencies of terms, bigrams and trigrams given a list of words
+    # Analyses the frequencies of term per person and overall vocabulary size
     def analyse_content(self, split_content, sender_name):
         self.sum_message_length[sender_name] += len(split_content)
         # Single word frequency analysis
@@ -592,7 +595,7 @@ class MessageReader:
                     f.write('\n')
 
 # FULL BUILD
-reader = MessageReader('englishST.txt', chain_length=3, threshold=10, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'], txt_names=['Gina'], json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'], build=True)
+reader = MessageReader('englishST.txt', chain_length=3, threshold=30, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'], txt_names=['Gina'], json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'], build=True)
 
 # JSON ONLY TESTING
 #reader = MessageReader('englishST.txt', chain_length=3, json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'], build=True)

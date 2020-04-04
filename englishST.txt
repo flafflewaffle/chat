@@ -177,6 +177,11 @@ got
 gotten
 greetings
 h
+haha 
+hahaha
+hahahaha
+hmmm
+hmmmm
 had
 hadn't
 happens
@@ -248,6 +253,10 @@ know
 knows
 known
 l
+lol 
+loll
+lolll
+lollll
 last
 lately
 later
@@ -748,4 +757,6 @@ won
 won't
 wouldn
 wouldn't
-
+yeah
+yes
+ye
