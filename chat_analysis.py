@@ -8,22 +8,27 @@ import itertools
 import arrow
 import emoji
 import random
+import nltk
+from nltk.stem.porter import *
+from nltk.stem import WordNetLemmatizer 
 
 ############################################################
 #-----              CLASS DECLARATION            ----------#
 ############################################################
 
 class MessageReader:
-    def __init__(self, stop_words_file, chain_length=2, limit_end_message=12, absolute_end_message=20, start_string='__START__', end_string='__END__', threshold=1, names=[], skip=[], txt_names=[], json_names=[], num_files=10, build=False):
-        # stop words
+    def __init__(self, stop_words_file, chain_length=2, limit_end_message=12, absolute_end_message=20, threshold=1, names=[], skip=[], txt_names=[], json_names=[], num_files=10, build=False):
+        # pre processing
+        self.stemmer = PorterStemmer()
+        self.lemmatizer = WordNetLemmatizer()
         self.stop_words = []
         if (os.path.isfile(stop_words_file)):
             self.read_stop_words(stop_words_file)
         
         # markov chain
         self.chain_length = chain_length
-        self.start_string = start_string
-        self.end_string = end_string
+        self.start_string = '__START__'
+        self.end_string = '__END__'
         self.limit_end_message = limit_end_message
         self.absolute_end_message = absolute_end_message + 2 # to account for start/end strings
         self.markov_chain = {}
@@ -126,12 +131,21 @@ class MessageReader:
         self.trigram_term_frequency_names = {}
 
     ############################################################
-    #-----                READ FILES                 ----------#
+    #-----              HELPER FUNCTIONS             ----------#
     ############################################################
 
     # Retrieve the alphanumeric characters in lowercase
     def tokenise(self, word):
         return ''.join(ch for ch in word.lower() if ch.isalnum() or ch in emoji.UNICODE_EMOJI or ch=='-' or ch =='\'')
+
+    def preprocess(self, terms):
+        tokens = []
+        for token in terms.split():
+            token = self.tokenise(token)
+            if len(token) > 3 and token not in self.stop_words and token not in self.skip:
+                stem = self.stemmer.stem(self.lemmatizer.lemmatize(token))
+                tokens.append(stem)
+        return tokens
 
     def format_markov_chain_file(self, file_index):
         return "{}/chain_{}.json".format(self.markov_dir, file_index)
@@ -159,23 +173,28 @@ class MessageReader:
             files[file_name].append(term)
         return files
 
+    ############################################################
+    #-----                READ FILES                 ----------#
+    ############################################################
+
     # Given a set of filenames (txt and/or json formats) parses the messages for all
     # Outputs statistics files and  builds a markov chain
     def read_all_messages(self):
         # read all txt files
         for name in self.txt_names:
             self.read_all_messages_in_dir('./{}'.format(name), json=False)
-            self.write_stat_text_files(name)
+            self.write_friend_metadata(name)
             self.reset()
         
         # read all json files
         for name in self.json_names:
             self.read_all_messages_in_dir('./{}'.format(name))
-            self.write_stat_text_files(name)
+            self.write_friend_metadata(name)
             self.reset()
 
         # write metadata
         self.write_markov_metadata()
+        self.write_topics()
 
     # Reads all the messages in a directory
     def read_all_messages_in_dir(self, message_dir, json=True):
@@ -273,6 +292,7 @@ class MessageReader:
             if current_sender != sender_name:
                 previous_sender = current_sender
                 self.build_markov_chain(previous_messages, reaction)
+                self.analyse_topics(previous_messages)
                 current_messages = previous_messages
                 previous_messages = []
                 current_sender = sender_name
@@ -335,6 +355,7 @@ class MessageReader:
                 if current_sender != sender_name:
                     previous_sender = current_sender
                     self.build_markov_chain(previous_messages, '')
+                    self.analyse_topics(previous_messages)
                     current_messages = previous_messages
                     previous_messages = []
                     current_sender = sender_name
@@ -345,7 +366,7 @@ class MessageReader:
                 self.analyse_content(split_content, sender_name)
 
     ############################################################
-    #-----              ANALYSIS FUNCTIONS           ----------#
+    #-----           MARKOV CHAIN FUNCTIONS          ----------#
     ############################################################
 
     # Build markov chain
@@ -471,6 +492,15 @@ class MessageReader:
 
         return ' '.join(message).capitalize()
 
+    # Preprocesses and analyses messages and records frequencies to model topics
+    def analyse_topics(self, messages):
+        for message in messages:
+            preprocess = self.preprocess(message)
+            for token in preprocess:
+                if token not in self.markov_context:
+                    self.markov_context[token] = 0
+                self.markov_context[token] += 1
+
     # Analyses the frequencies of terms, bigrams and trigrams given a list of words
     def analyse_content(self, split_content, sender_name):
         self.sum_message_length[sender_name] += len(split_content)
@@ -486,40 +516,6 @@ class MessageReader:
                         self.term_frequency_names[term][name] = 0
                 self.total_term_frequency[term] += 1
                 self.term_frequency_names[term][sender_name] += 1
-
-        # Bigram frequency analysis
-        # Ignores frequencies of less than 4 (nonsensical phrases)
-        i = 0
-        while(i < len(split_content)-2):
-            bigram = ' '.join([self.tokenise(w) for w in split_content[i:i+2] if self.tokenise(w) not in self.skip])
-            i += 1
-            if(len(bigram) > 0):
-                if (bigram not in self.bigram_total_term_frequency):
-                    self.bigram_total_term_frequency[bigram] = 0
-                    self.bigram_term_frequency_names[bigram] = {}
-                    for name in self.names:
-                        self.bigram_term_frequency_names[bigram][name] = 0
-                self.bigram_total_term_frequency[bigram] += 1
-                if(self.bigram_total_term_frequency[bigram] >= self.threshold):
-                    self.bigram_phrases += 1
-                self.bigram_term_frequency_names[bigram][sender_name] += 1
-
-        # Trigram frequency analysis
-        # Ignores frequencies of less than 4 (nonsensical phrases)
-        i = 0
-        while(i < len(split_content)-3):
-            trigram = ' '.join([self.tokenise(w) for w in split_content[i:i+3] if self.tokenise(w) not in self.skip])
-            i += 1
-            if(len(trigram) > 0):
-                if (trigram not in self.trigram_total_term_frequency):
-                    self.trigram_total_term_frequency[trigram] = 0
-                    self.trigram_term_frequency_names[trigram] = {}
-                    for name in self.names:
-                        self.trigram_term_frequency_names[trigram][name] = 0
-                self.trigram_total_term_frequency[trigram] += 1
-                if(self.trigram_total_term_frequency[trigram] >= self.threshold):
-                    self.trigram_phrases += 1
-                self.trigram_term_frequency_names[trigram][sender_name] += 1
 
     ############################################################
     #-----              WRITE OUTPUT FILES           ----------#
@@ -547,141 +543,56 @@ class MessageReader:
 
     # Writes Markov chain to text file for readability
     def write_markov_metadata(self):
-        markov_metadata = {}
-        markov_metadata['chain_length'] = self.chain_length
-        markov_metadata['total_message_count'] = self.markov_message_count
-        markov_metadata['total_word_count'] = self.markov_word_count
-        markov_metadata['start_date'] = self.markov_start_date.format('YYYY-MM-DD HH:mm:ss')
-        markov_metadata['end_date'] = self.markov_end_date.format('YYYY-MM-DD HH:mm:ss')
-        markov_metadata['last_updated'] = self.updated.format('YYYY-MM-DD HH:mm:ss')
-        markov_metadata['files'] = self.filenames
+        metadata = {}
+        metadata['chain_length'] = self.chain_length
+        metadata['total_message_count'] = self.markov_message_count
+        metadata['total_word_count'] = self.markov_word_count
+        metadata['start_date'] = self.markov_start_date.format('YYYY-MM-DD HH:mm:ss')
+        metadata['end_date'] = self.markov_end_date.format('YYYY-MM-DD HH:mm:ss')
+        metadata['last_updated'] = self.updated.format('YYYY-MM-DD HH:mm:ss')
+        metadata['files'] = self.filenames
 
-        self.write_dict_json(markov_metadata, '{}/metadata.json'.format(self.markov_dir))
+        self.write_dict_json(metadata, '{}/metadata.json'.format(self.markov_dir))
 
-    # Writes the metadata file in a readable text format
-    def write_metadata(self, friend):
-        dir_name = './{}_stats'.format(friend)
-        if not os.path.isdir(dir_name):
-            os.mkdir(dir_name)
+    # Writes the metadata file for each message set 
+    def write_friend_metadata(self, friend):
+        metadata = {}
+        metadata['last_updated'] = self.updated.format('YYYY-MM-DD HH:mm:ss')
+        metadata['vocabulary_size'] = self.vocabulary_size
+        metadata['total_word_count'] = self.total_word_count
+        metadata['word_count_per_person'] = {}
+        for name in self.names:
+            metadata['word_count_per_person'][name] = self.sum_message_length[name]
+        metadata['total_number_of_messages'] = self.total_no_messages
+        metadata['messages_per_person'] = {}
+        for name in self.names:
+            metadata['messages_per_person'][name] = self.messages_per_person[name]
+        metadata['average_message_length'] = {}
+        for name in self.names:
+            metadata['average_message_length'][name] = self.average_message_length[name]
+        if self.start_date is not None:
+            metadata['start_date'] = self.start_date.format('YYYY-MM-DD')
+        if self.end_date is not None:
+            metadata['end_date'] = self.end_date.format('YYYY-MM-DD')
+        if self.start_date and self.end_date is not None:
+            diff = self.end_date - self.start_date
+            metadata['total_duration'] = str(diff)
+        self.write_dict_json(metadata, '{}_metadata.json'.format(friend))
 
-        # Write Metadata File
-        with open('{}/{}_metadata.txt'.format(dir_name, friend), 'w') as f_write:
-            f_write.write(str('Last Updated: %s' % self.updated.format('YYYY-MM-DD HH:mm:ss')))
-            f_write.write('\n')
-
-            f_write.write(str('Vocabulary Size: %d' % self.vocabulary_size))
-            f_write.write('\n')
-            
-            f_write.write(str('Total Word Count: %d' % self.total_word_count))
-            f_write.write('\n')
-
-            for name in self.names:
-                f_write.write(str('\t%s: %d' % (name, self.sum_message_length[name])))
-                f_write.write('\n')
-
-            f_write.write(str('Total Number of Messages: %d' % self.total_no_messages))
-            f_write.write('\n')
-
-            for name in self.names:
-                f_write.write(str('\t%s: %d' % (name, self.messages_per_person[name])))
-                f_write.write('\n')
-
-            f_write.write('Average Message Length:\n')
-            
-            for name in self.names:
-                f_write.write(str('\t%s: %d' % (name, self.average_message_length[name])))
-                f_write.write('\n')
-
-            f_write.write(str('Number of Bigram Phrases: %d' % self.bigram_phrases))
-            f_write.write('\n')
-
-            f_write.write(str('Number of Trigram Phrases: %d' % self.trigram_phrases))
-            f_write.write('\n')
-
-            if self.start_date is not None: 
-                f_write.write(str('Start Date: %s' % self.start_date.format('YYYY-MM-DD')))
-                f_write.write('\n')
-
-            if self.end_date is not None:
-                f_write.write(str('End Date: %s' % self.end_date.format('YYYY-MM-DD')))
-                f_write.write('\n')
-
-            if self.start_date and self.end_date is not None:
-                diff = self.end_date - self.start_date
-                f_write.write(str('Total duration: %s' % diff))
-                f_write.write('\n')
-                
-    # Writes out the message stats in a readable text format
-    def write_stat_text_files(self, friend):
-        dir_name = './{}_stats'.format(friend)
-        if not os.path.isdir(dir_name):
-            os.mkdir(dir_name)
-
-        self.write_metadata(friend)
-
-        # Write Single Term Frequency file
-        with open('{}/{}_stats.txt'.format(dir_name, friend), 'w') as f_write:
-            f_write.write(str('Vocabulary Size: %d' % self.vocabulary_size))
-            f_write.write('\n')
-
-            f_write.write(str('Total Number of Messages: %d' % self.total_no_messages))
-            f_write.write('\n')
-
-            for name in self.names:
-                f_write.write(str('%s: %d' % (name, self.messages_per_person[name])))
-                f_write.write('\n')
-
-            f_write.write('\n')
-            f_write.write('WORD FREQUENCIES')
-            f_write.write('\n\n')
-
-            sort_by_freq = sorted(self.total_term_frequency.items(),key=operator.itemgetter(1),reverse=True)
+    # Write out most common topics (words) and filters past the defined threshold
+    def write_topics(self):
+        self.markov_context = dict(filter(lambda elem: elem[1] >= self.threshold, self.markov_context.items()))
+        self.write_dict_json(self.markov_context, 'topics.json')
+        with open('topics.txt', 'w') as f:
+            sort_by_freq = sorted(self.markov_context.items(),key=operator.itemgetter(1),reverse=True)
             sorted_term_frequency = collections.OrderedDict(sort_by_freq)
             for word, frequency in sorted_term_frequency.items():
-                f_write.write(str('%s: %s'% (word.encode('utf8'),frequency)))
-                f_write.write('\n')
-                for name in self.names:
-                    f_write.write('\t')
-                    f_write.write(str('%s: %s'% (name,self.term_frequency_names[word][name])))
-                    f_write.write('\n')
+                if frequency >= self.threshold:
+                    f.write(str('%s: %s'% (word.encode('utf8'),frequency)))
+                    f.write('\n')
 
-        # Write Bigram Frequency file
-        with open('{}/{}_bigram_stats.txt'.format(dir_name, friend), 'w') as f_write:
-            f_write.write('BIGRAM PHRASE FREQUENCIES')
-            f_write.write('\n\n')
-            f_write.write(str('Number of Bigram Phrases: %d' % self.bigram_phrases))
-            f_write.write('\n')
-
-            sort_by_freq = sorted(self.bigram_total_term_frequency.items(),key=operator.itemgetter(1),reverse=True)
-            sorted_bigram_term_frequency = collections.OrderedDict(sort_by_freq)
-            for word, frequency in sorted_bigram_term_frequency.items():
-                if(frequency >= self.threshold):
-                    f_write.write(str('%s: %s'% (word.encode('utf8'),frequency)))
-                    f_write.write('\n')
-                    for name in self.names:
-                        f_write.write('\t')
-                        f_write.write(str('%s: %s'% (name,self.bigram_term_frequency_names[word][name])))
-                        f_write.write('\n')
-
-        # Write Trigram Frequency file
-        with open('{}/{}_trigram_stats.txt'.format(dir_name, friend), 'w') as f_write:
-            f_write.write('TRIGRAM PHRASE FREQUENCIES')
-            f_write.write('\n\n')
-            f_write.write(str('Number of Trigram Phrases: %d' % self.trigram_phrases))
-            f_write.write('\n')
-
-            sort_by_freq = sorted(self.trigram_total_term_frequency.items(),key=operator.itemgetter(1),reverse=True)
-            sorted_trigram_term_frequency = collections.OrderedDict(sort_by_freq)
-            for word, frequency in sorted_trigram_term_frequency.items():
-                if(frequency >= self.threshold):
-                    f_write.write(str('%s: %s'% (word.encode('utf8'),frequency)))
-                    f_write.write('\n')
-                    for name in self.names:
-                        f_write.write('\t')
-                        f_write.write(str('%s: %s'% (name,self.trigram_term_frequency_names[word][name])))
-                        f_write.write('\n')
 # FULL BUILD
-reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'], txt_names=['Gina'], json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'], build=True)
+reader = MessageReader('englishST.txt', chain_length=3, threshold=10, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'], txt_names=['Gina'], json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'], build=True)
 
 # JSON ONLY TESTING
 #reader = MessageReader('englishST.txt', chain_length=3, json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'], build=True)
