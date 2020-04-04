@@ -32,7 +32,7 @@ class MessageReader:
         self.limit_end_message = limit_end_message
         self.absolute_end_message = absolute_end_message + 2 # to account for start/end strings
         self.markov_chain = {}
-        self.markov_context = {}
+        self.topics = {}
         self.markov_word_count = 0
         self.markov_message_count = 0
         self.markov_start_date = None
@@ -149,9 +149,6 @@ class MessageReader:
 
     def format_markov_chain_file(self, file_index):
         return "{}/chain_{}.json".format(self.markov_dir, file_index)
-
-    def format_markov_context_file(self, file_index):
-        return "{}/context_{}.json".format(self.markov_dir, file_index)
 
     # Returns the file index for a term
     def hash_term(self, term):
@@ -500,9 +497,9 @@ class MessageReader:
             for (token, tag) in tagged_tokens:
                 if tag == 'NN' or tag == 'VBP':
                     word = self.tokenise(preprocess[token])
-                    if word not in self.markov_context:
-                        self.markov_context[word] = 0
-                    self.markov_context[word] += 1
+                    if word not in self.topics:
+                        self.topics[word] = 0
+                    self.topics[word] += 1
 
     # Analyses the frequencies of term per person and overall vocabulary size
     def analyse_content(self, split_content, sender_name):
@@ -584,10 +581,10 @@ class MessageReader:
 
     # Write out most common topics (words) and filters past the defined threshold
     def write_topics(self):
-        self.markov_context = dict(filter(lambda elem: elem[1] >= self.threshold, self.markov_context.items()))
-        self.write_dict_json(self.markov_context, 'topics.json')
+        self.topics = dict(filter(lambda elem: elem[1] >= self.threshold, self.topics.items()))
+        self.write_dict_json(self.topics, 'topics.json')
         with open('topics.txt', 'w') as f:
-            sort_by_freq = sorted(self.markov_context.items(),key=operator.itemgetter(1),reverse=True)
+            sort_by_freq = sorted(self.topics.items(),key=operator.itemgetter(1),reverse=True)
             sorted_term_frequency = collections.OrderedDict(sort_by_freq)
             for word, frequency in sorted_term_frequency.items():
                 if frequency >= self.threshold:
