@@ -32,6 +32,7 @@ class MessageReader:
         self.limit_end_message = limit_end_message
         self.absolute_end_message = absolute_end_message + 2 # to account for start/end strings
         self.markov_chain = {}
+        self.markov_context = {}
         self.topics = {}
         self.markov_word_count = 0
         self.markov_message_count = 0
@@ -217,6 +218,11 @@ class MessageReader:
             if self.markov_chain:
                 self.update_files(self.markov_chain, self.format_markov_chain_file)
                 self.markov_chain = {}
+            
+            # update context files and reset the local variable
+            if self.markov_context:
+                self.write_dict_json(self.markov_context, "{}/context_start.json".format(self.markov_dir))
+                self.markov_context = {}
         
         # Calculate total word and average message lengths
         for name in self.names:
@@ -289,6 +295,7 @@ class MessageReader:
             if current_sender != sender_name:
                 previous_sender = current_sender
                 self.build_markov_chain(previous_messages, reaction)
+                self.build_context(previous_messages, current_messages)
                 self.analyse_topics(previous_messages)
                 current_messages = previous_messages
                 previous_messages = []
@@ -352,6 +359,7 @@ class MessageReader:
                 if current_sender != sender_name:
                     previous_sender = current_sender
                     self.build_markov_chain(previous_messages, '')
+                    self.build_context(previous_messages, current_messages)
                     self.analyse_topics(previous_messages)
                     current_messages = previous_messages
                     previous_messages = []
@@ -442,6 +450,40 @@ class MessageReader:
                 phrase = words[i:i+self.chain_length+1]
                 chain.append(phrase)
         return chain
+
+    # build context model
+    def build_context(self, previous_messages, current_messages):
+        current_chains = []
+        previous_chains = []
+        # if neither current or previous message blocks are empty split into chain lengths
+        if current_messages and previous_messages:
+            for message in current_messages:
+                current_chains.append(self.chain_message(message))
+            current_chains = list(itertools.chain.from_iterable(current_chains))
+
+            for message in previous_messages:
+                previous_chains.append(self.chain_message(message))
+            previous_chains = list(itertools.chain.from_iterable(previous_chains))
+
+        # Map the start string to the first self.chain_length-1 words in the current sentence 
+        # Pops the starting chain length from both chains
+        if current_chains and previous_chains:
+            
+            start_previous = ' '.join(previous_chains[0][0:self.chain_length])
+            chain = current_chains[0]
+            start_current = ' '.join(chain[0:self.chain_length])
+            next_current = chain[-1]
+
+            previous_chains.pop(0)
+            current_chains.pop(0)
+
+            if start_previous not in self.markov_context:
+                self.markov_context[start_previous] = {}
+            if start_current not in self.markov_context[start_previous]:
+                self.markov_context[start_previous][start_current] = {}
+            if next_current not in self.markov_context[start_previous][start_current]:
+                self.markov_context[start_previous][start_current][next_current] = 0
+            self.markov_context[start_previous][start_current][next_current] += 1
 
     def generate_message(self):
         print('Generating sentence using chain length of {}'.format(self.chain_length))

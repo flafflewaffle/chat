@@ -330,6 +330,8 @@ ok
 okay
 old
 on
+omg
+omfg
 once
 one
 ones
@@ -760,3 +762,5 @@ wouldn't
 yeah
 yes
 ye
+yeahhhh
+yeahhhhhh
