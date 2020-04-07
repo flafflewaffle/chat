@@ -34,6 +34,7 @@ class MessageReader:
         self.markov_chain = {}
         self.markov_context = {}
         self.topics = {}
+        self.reactions = {}
         self.markov_word_count = 0
         self.markov_message_count = 0
         self.markov_start_date = None
@@ -87,6 +88,10 @@ class MessageReader:
                 self.markov_start_date = arrow.get(markov_metadata['start_date'])
                 self.markov_end_date = arrow.get(markov_metadata['end_date'])
                 self.filenames = markov_metadata['files']
+            if os.path.isfile('reactions.json'):
+                self.reactions = self.load_json_dict('reactions.json')
+            if os.path.isfile('topics.json'):
+                self.topics = self.load_json_dict('topics.json')
         else:
             print('Rebuilding Markov Chain with Chain Length {}'.format(self.chain_length))
         
@@ -151,6 +156,9 @@ class MessageReader:
     def format_markov_chain_file(self, file_index):
         return "{}/chain_{}.json".format(self.markov_dir, file_index)
 
+    def format_markov_context_file(self, file_index):
+        return "{}/context_start.json".format(self.markov_dir)
+
     # Returns the file index for a term
     def hash_term(self, term):
         hash = hashlib.md5(term.encode())
@@ -170,6 +178,28 @@ class MessageReader:
                 files[file_name] = []
             files[file_name].append(term)
         return files
+
+    # updates files with current dictionary input 
+    def update_files(self, input_dict, formatter):
+        # group files to list of chain lengths
+        relevant_files = self.relevant_files(input_dict.keys(), formatter)
+
+        for context_file, chains in relevant_files.items():
+            try:
+                # read existing relevant file and add chain lengths to it
+                relevant_dict = self.load_json_dict(context_file)
+
+                for chain in chains:
+                    if chain in relevant_dict:
+                        relevant_dict[chain].update(input_dict[chain])
+                    else:
+                        relevant_dict[chain] = input_dict[chain]
+            except (FileNotFoundError, EOFError):
+                #file not found, so create a new file alltogether
+                relevant_dict = {k: input_dict[k] for k in chains}
+
+            # write out to context file
+            self.write_dict_json(relevant_dict, context_file)
 
     ############################################################
     #-----                READ FILES                 ----------#
@@ -221,7 +251,7 @@ class MessageReader:
             
             # update context files and reset the local variable
             if self.markov_context:
-                self.write_dict_json(self.markov_context, "{}/context_start.json".format(self.markov_dir))
+                self.update_files(self.markov_context, self.format_markov_context_file)
                 self.markov_context = {}
         
         # Calculate total word and average message lengths
@@ -409,28 +439,6 @@ class MessageReader:
                         if reaction not in self.markov_chain[context]:
                             self.markov_chain[context][reaction] = 0
                         self.markov_chain[context][reaction] += 1
-    
-    # update current context to files
-    def update_files(self, input_dict, formatter):
-        # group files to list of chain lengths
-        relevant_files = self.relevant_files(input_dict.keys(), formatter)
-
-        for context_file, chains in relevant_files.items():
-            try:
-                # read existing relevant file and add chain lengths to it
-                relevant_dict = self.load_json_dict(context_file)
-
-                for chain in chains:
-                    if chain in relevant_dict:
-                        relevant_dict[chain].update(input_dict[chain])
-                    else:
-                        relevant_dict[chain] = input_dict[chain]
-            except (FileNotFoundError, EOFError):
-                #file not found, so create a new file alltogether
-                relevant_dict = {k: input_dict[k] for k in chains}
-
-            # write out to context file
-            self.write_dict_json(relevant_dict, context_file)
 
     # splits a message and returns a list of chain lengths adding the start and end strings
     def chain_message(self, message):
@@ -465,25 +473,24 @@ class MessageReader:
                 previous_chains.append(self.chain_message(message))
             previous_chains = list(itertools.chain.from_iterable(previous_chains))
 
-        # Map the start string to the first self.chain_length-1 words in the current sentence 
-        # Pops the starting chain length from both chains
+        current_chains = [chain for chain in current_chains if self.start_string in chain]
+        previous_chains = [chain for chain in previous_chains if self.start_string in chain]
+
+        # Map the starts of previous messages to the start of current messages
         if current_chains and previous_chains:
-            
-            start_previous = ' '.join(previous_chains[0][0:self.chain_length])
-            chain = current_chains[0]
-            start_current = ' '.join(chain[0:self.chain_length])
-            next_current = chain[-1]
-
-            previous_chains.pop(0)
-            current_chains.pop(0)
-
-            if start_previous not in self.markov_context:
-                self.markov_context[start_previous] = {}
-            if start_current not in self.markov_context[start_previous]:
-                self.markov_context[start_previous][start_current] = {}
-            if next_current not in self.markov_context[start_previous][start_current]:
-                self.markov_context[start_previous][start_current][next_current] = 0
-            self.markov_context[start_previous][start_current][next_current] += 1
+            for previous_chain in previous_chains:
+                previous = ' '.join(previous_chain[0:self.chain_length])
+                if previous not in self.markov_context:
+                    self.markov_context[previous] = {}
+                
+                for current_chain in current_chains:
+                    current = ' '.join(current_chain[0:self.chain_length])
+                    next = current_chain[-1]
+                    if current not in self.markov_context[previous]:
+                        self.markov_context[previous][current] = {}
+                    if next not in self.markov_context[previous][current]:
+                        self.markov_context[previous][current][next] = 0
+                    self.markov_context[previous][current][next] += 1
 
     def generate_message(self):
         print('Generating sentence using chain length of {}'.format(self.chain_length))
