@@ -463,6 +463,7 @@ class MessageReader:
     def build_context(self, previous_messages, current_messages):
         current_chains = []
         previous_chains = []
+
         # if neither current or previous message blocks are empty split into chain lengths
         if current_messages and previous_messages:
             for message in current_messages:
@@ -484,24 +485,31 @@ class MessageReader:
                     self.markov_context[previous] = {}
                 
                 for current_chain in current_chains:
-                    current = ' '.join(current_chain[0:self.chain_length])
-                    next = current_chain[-1]
+                    current = ' '.join(current_chain[1:self.chain_length])
                     if current not in self.markov_context[previous]:
-                        self.markov_context[previous][current] = {}
-                    if next not in self.markov_context[previous][current]:
-                        self.markov_context[previous][current][next] = 0
-                    self.markov_context[previous][current][next] += 1
-
-    def generate_message(self):
+                        self.markov_context[previous][current] = 0
+                    self.markov_context[previous][current] += 1
+        
+    def generate_message(self, input_message):
         print('Generating sentence using chain length of {}'.format(self.chain_length))
-        # Generate first word and add to the message
         message = [self.start_string]
-        self.markov_chain = self.load_json_dict(self.format_markov_chain_file('start'))
-        start = self.markov_chain[self.start_string]
+        start_input = ''
+        input_chain = self.chain_message(input_message)
+        if input_chain:
+            start_input = ' '.join(input_chain[0][0:self.chain_length])
+            self.markov_context = self.load_json_dict(self.format_markov_context_file('start'))
 
+        # if input message is in context, use that for the start
+        # else use the generic markov chain start
+        if start_input in self.markov_context:
+            start = self.markov_context[start_input]
+        else:   
+            self.markov_chain = self.load_json_dict(self.format_markov_chain_file('start'))
+            start = self.markov_chain[self.start_string]
+
+        # Generate first word and add to the message
         start_words = list(start.keys())
         start_weights = list(start.values())
-
         # randomly select start word using the frequency of the word as weight
         first_word = random.choices(start_words, weights=start_weights)
         start_key = first_word[0].split()
@@ -651,4 +659,4 @@ reader = MessageReader('englishST.txt', chain_length=3, threshold=30, names=['Gi
 
 # MESSAGE GENERATION ONLY TESTING
 #reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'])
-print(reader.generate_message())
+print(reader.generate_message("Hope you have a wonderful day"))
