@@ -157,7 +157,7 @@ class MessageReader:
         return "{}/chain_{}.json".format(self.markov_dir, file_index)
 
     def format_markov_context_file(self, file_index):
-        return "{}/context_start.json".format(self.markov_dir)
+        return "{}/context_start_{}.json".format(self.markov_dir, file_index)
 
     # Returns the file index for a term
     def hash_term(self, term):
@@ -179,27 +179,31 @@ class MessageReader:
             files[file_name].append(term)
         return files
 
-    # updates files with current dictionary input 
+    # updates markov chain files with current dictionary, using hash and format files
     def update_files(self, input_dict, formatter):
         # group files to list of chain lengths
         relevant_files = self.relevant_files(input_dict.keys(), formatter)
 
-        for context_file, chains in relevant_files.items():
+        for relevant_file, chains in relevant_files.items():
             try:
                 # read existing relevant file and add chain lengths to it
-                relevant_dict = self.load_json_dict(context_file)
+                relevant_dict = self.load_json_dict(relevant_file)
 
                 for chain in chains:
                     if chain in relevant_dict:
-                        relevant_dict[chain].update(input_dict[chain])
+                        for term,freq in input_dict[chain].items():
+                            if term in relevant_dict[chain]:
+                                relevant_dict[chain][term] += freq
+                            else:
+                                relevant_dict[chain][term] = freq
                     else:
                         relevant_dict[chain] = input_dict[chain]
             except (FileNotFoundError, EOFError):
                 #file not found, so create a new file alltogether
                 relevant_dict = {k: input_dict[k] for k in chains}
 
-            # write out to context file
-            self.write_dict_json(relevant_dict, context_file)
+            # write out to relevant file
+            self.write_dict_json(relevant_dict, relevant_file)
 
     ############################################################
     #-----                READ FILES                 ----------#
@@ -389,7 +393,7 @@ class MessageReader:
                 if current_sender != sender_name:
                     previous_sender = current_sender
                     self.build_markov_chain(previous_messages, '')
-                    self.build_context(previous_messages, current_messages)
+                    self.build_context(current_messages, previous_messages)
                     self.analyse_topics(previous_messages)
                     current_messages = previous_messages
                     previous_messages = []
@@ -489,7 +493,8 @@ class MessageReader:
                     if current not in self.markov_context[previous]:
                         self.markov_context[previous][current] = 0
                     self.markov_context[previous][current] += 1
-        
+
+    # generate message using markov chain and takes an input message for context
     def generate_message(self, input_message):
         print('Generating sentence using chain length of {}'.format(self.chain_length))
         message = [self.start_string]
@@ -497,7 +502,8 @@ class MessageReader:
         input_chain = self.chain_message(input_message)
         if input_chain:
             start_input = ' '.join(input_chain[0][0:self.chain_length])
-            self.markov_context = self.load_json_dict(self.format_markov_context_file('start'))
+            start_index = self.hash_term(start_input)
+            self.markov_context = self.load_json_dict(self.format_markov_context_file(start_index))
 
         # if input message is in context, use that for the start
         # else use the generic markov chain start
@@ -649,7 +655,7 @@ class MessageReader:
                     f.write('\n')
 
 # FULL BUILD
-reader = MessageReader('englishST.txt', chain_length=3, threshold=30, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'], txt_names=['Gina'], json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'], build=True)
+#reader = MessageReader('englishST.txt', chain_length=3, threshold=30, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'], txt_names=['Gina'], json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'], build=True)
 
 # JSON ONLY TESTING
 #reader = MessageReader('englishST.txt', chain_length=3, json_names= ['Melissa', 'Malavika', 'Bogdan', 'Meredith', 'Ryan'], build=True)
@@ -658,5 +664,5 @@ reader = MessageReader('englishST.txt', chain_length=3, threshold=30, names=['Gi
 #reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'], txt_names=['Gina'], build=True)
 
 # MESSAGE GENERATION ONLY TESTING
-#reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'])
-print(reader.generate_message("Hope you have a wonderful day"))
+reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'])
+print(reader.generate_message("I love you"))
