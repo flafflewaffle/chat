@@ -227,6 +227,7 @@ class MessageReader:
         # write metadata
         self.write_markov_metadata()
         self.write_topics()
+        self.filter_context()
 
     # Reads all the messages in a directory
     def read_all_messages_in_dir(self, message_dir, json=True):
@@ -579,6 +580,29 @@ class MessageReader:
                         self.term_frequency_names[term][name] = 0
                 self.total_term_frequency[term] += 1
                 self.term_frequency_names[term][sender_name] += 1
+    
+    # Filters the lowest frequencies of the context start files
+    def filter_context(self):
+        for i in range(self.num_files):
+            context_file = self.format_markov_context_file(i)
+            if os.path.isfile(context_file):
+                self.markov_context = self.load_json_dict(context_file)
+                reduce = []
+                
+                for key, freq_dict in self.markov_context.items():
+                    freq_dict = dict(filter(lambda elem: elem[1] > 1, freq_dict.items()))
+                    if freq_dict:
+                        self.markov_context[key] = freq_dict
+                    else: 
+                        reduce.append(key)
+                
+                for key in reduce:
+                    self.markov_context.pop(key, None)
+
+                self.write_dict_json(self.markov_context, context_file)
+            else:
+                print("Invalid context file: {}".format(context_file))
+                continue
 
     ############################################################
     #-----              WRITE OUTPUT FILES           ----------#
@@ -665,4 +689,4 @@ class MessageReader:
 
 # MESSAGE GENERATION ONLY TESTING
 reader = MessageReader('englishST.txt', chain_length=3, names=['Gina', 'Sophia'], skip=['Bolognesi', 'Singh'])
-print(reader.generate_message("I love you"))
+print(reader.generate_message("hope you have a wonderful day"))
