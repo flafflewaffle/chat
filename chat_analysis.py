@@ -32,7 +32,8 @@ class MessageReader:
         self.limit_end_message = limit_end_message
         self.absolute_end_message = absolute_end_message + 2 # to account for start/end strings
         self.markov_chain = {}
-        self.markov_context = {}
+        self.chat_context = {}
+        self.chat_reaction = {}
         self.topics = {}
         self.reactions = {}
         self.markov_word_count = 0
@@ -156,8 +157,11 @@ class MessageReader:
     def format_markov_chain_file(self, file_index):
         return "{}/chain_{}.json".format(self.markov_dir, file_index)
 
-    def format_markov_context_file(self, file_index):
+    def format_chat_context_file(self, file_index):
         return "{}/context_start_{}.json".format(self.markov_dir, file_index)
+
+    def format_chat_reaction_file(self, file_index):
+        return "{}/reaction_{}.json".format(self.markov_dir, file_index)
 
     # Returns the file index for a term
     def hash_term(self, term):
@@ -227,7 +231,8 @@ class MessageReader:
         # write metadata
         self.write_markov_metadata()
         self.write_topics()
-        self.filter_context()
+        self.filter_dict(self.format_chat_context_file)
+        self.filter_dict(self.format_chat_reaction_file)
 
     # Reads all the messages in a directory
     def read_all_messages_in_dir(self, message_dir, json=True):
@@ -255,9 +260,14 @@ class MessageReader:
                 self.markov_chain = {}
             
             # update context files and reset the local variable
-            if self.markov_context:
-                self.update_files(self.markov_context, self.format_markov_context_file)
-                self.markov_context = {}
+            if self.chat_context:
+                self.update_files(self.chat_context, self.format_chat_context_file)
+                self.chat_context = {}
+            
+            # update context files and reset the local variable
+            if self.chat_reaction:
+                self.update_files(self.chat_reaction, self.format_chat_reaction_file)
+                self.chat_reaction = {}
         
         # Calculate total word and average message lengths
         for name in self.names:
@@ -440,10 +450,14 @@ class MessageReader:
                     if next_word not in self.markov_chain[context]:
                         self.markov_chain[context][next_word] = 0
                     self.markov_chain[context][next_word] += 1
+                    
+                    # update reactions
                     if reaction:
-                        if reaction not in self.markov_chain[context]:
-                            self.markov_chain[context][reaction] = 0
-                        self.markov_chain[context][reaction] += 1
+                        if context not in self.chat_reaction:
+                            self.chat_reaction[context] = {}
+                        if reaction not in self.chat_reaction[context]:
+                            self.chat_reaction[context][reaction] = 0
+                        self.chat_reaction[context][reaction] += 1
 
     # splits a message and returns a list of chain lengths adding the start and end strings
     def chain_message(self, message):
@@ -479,21 +493,22 @@ class MessageReader:
                 previous_chains.append(self.chain_message(message))
             previous_chains = list(itertools.chain.from_iterable(previous_chains))
 
-        current_chains = [chain for chain in current_chains if self.start_string in chain]
-        previous_chains = [chain for chain in previous_chains if self.start_string in chain]
+        # filter out non start strings
+        current_chains = list(filter(lambda s: self.start_string in s, current_chains))
+        previous_chains = list(filter(lambda s: self.start_string in s, previous_chains))
 
         # Map the starts of previous messages to the start of current messages
         if current_chains and previous_chains:
             for previous_chain in previous_chains:
                 previous = ' '.join(previous_chain[0:self.chain_length])
-                if previous not in self.markov_context:
-                    self.markov_context[previous] = {}
+                if previous not in self.chat_context:
+                    self.chat_context[previous] = {}
                 
                 for current_chain in current_chains:
                     current = ' '.join(current_chain[1:self.chain_length])
-                    if current not in self.markov_context[previous]:
-                        self.markov_context[previous][current] = 0
-                    self.markov_context[previous][current] += 1
+                    if current not in self.chat_context[previous]:
+                        self.chat_context[previous][current] = 0
+                    self.chat_context[previous][current] += 1
 
     # generate message using markov chain and takes an input message for context
     def generate_message(self, input_message):
@@ -504,12 +519,12 @@ class MessageReader:
         if input_chain:
             start_input = ' '.join(input_chain[0][0:self.chain_length])
             start_index = self.hash_term(start_input)
-            self.markov_context = self.load_json_dict(self.format_markov_context_file(start_index))
+            self.chat_context = self.load_json_dict(self.format_chat_context_file(start_index))
 
         # if input message is in context, use that for the start
         # else use the generic markov chain start
-        if start_input in self.markov_context:
-            start = self.markov_context[start_input]
+        if start_input in self.chat_context:
+            start = self.chat_context[start_input]
         else:   
             self.markov_chain = self.load_json_dict(self.format_markov_chain_file('start'))
             start = self.markov_chain[self.start_string]
@@ -581,25 +596,22 @@ class MessageReader:
                 self.total_term_frequency[term] += 1
                 self.term_frequency_names[term][sender_name] += 1
     
-    # Filters the lowest frequencies of the context start files
-    def filter_context(self):
+    # Filters the lowest frequencies of the appropriate json files corresponding to a particular dict
+    def filter_dict(self, formatter, threshold=1):
         for i in range(self.num_files):
-            context_file = self.format_markov_context_file(i)
+            context_file = formatter(i)
             if os.path.isfile(context_file):
-                self.markov_context = self.load_json_dict(context_file)
+                relevant_dict = self.load_json_dict(context_file)
                 reduce = []
-                
-                for key, freq_dict in self.markov_context.items():
-                    freq_dict = dict(filter(lambda elem: elem[1] > 1, freq_dict.items()))
+                for key, freq_dict in relevant_dict.items():
+                    freq_dict = dict(filter(lambda elem: elem[1] > threshold, freq_dict.items()))
                     if freq_dict:
-                        self.markov_context[key] = freq_dict
+                        relevant_dict[key] = freq_dict
                     else: 
                         reduce.append(key)
-                
                 for key in reduce:
-                    self.markov_context.pop(key, None)
-
-                self.write_dict_json(self.markov_context, context_file)
+                    relevant_dict.pop(key, None)
+                self.write_dict_json(relevant_dict, context_file)
             else:
                 print("Invalid context file: {}".format(context_file))
                 continue
