@@ -568,6 +568,10 @@ class MessageReader:
 
         return ' '.join(message).capitalize()
 
+    # return a suitable emotive reaction for messages
+    def react_to_message(self, input_message):
+        pass
+
     # Preprocesses and analyses messages and records frequencies to model topics
     def analyse_topics(self, messages):
         for message in messages:
